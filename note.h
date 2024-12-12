@@ -21,6 +21,6 @@ Returns
 
 #define root2 1.0594631 //twelfth root of 2
 
-extern inline void findNote(float f, int a, int* results);
+extern inline void findNote(float f, int a, int* results, float* centErrorOut);
 
 #endif

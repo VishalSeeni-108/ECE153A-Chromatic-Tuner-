@@ -125,8 +125,8 @@ float fft(float* q, float* w, int n, int m, float sample_f) {
 //			q[i]=new_[i];
 //			w[i]=new_im[i];
 //		}
-		memcpy(q, new_, sizeof(float)*512);
-		memcpy(w, new_im, sizeof(float)*512);
+		memcpy(q, new_, sizeof(float)*n);
+		memcpy(w, new_im, sizeof(float)*n);
 
 	//END MATH
 

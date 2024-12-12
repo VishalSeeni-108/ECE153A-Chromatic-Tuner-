@@ -18,13 +18,14 @@
 #include "fft.h"
 #include "note.h"
 #include "math.h"
+#include "stdlib.h"
 
 int volume = 63;
 int mode = 1;
 bool mute = false;
 
 //FFT Stuff
-#define SAMPLES 512 // AXI4 Streaming Data FIFO has size 512
+#define SAMPLES 2048
 #define M 9 //2^m=samples
 #define CLOCK 100000000.0 //clock speed
 
@@ -32,11 +33,13 @@ bool mute = false;
 const int noteX = 75;
 const int noteY = 50;
 const int octX = 15;
-const int octY = 175;
+const int octY = 200;
 const int freqX = octX;
 const int freqY = octY + 30;
-const int baseX = freqX;
-const int baseY = freqY + 30;
+const int centX = freqX;
+const int centY = freqY + 30;
+const int baseX = centX;
+const int baseY = centY + 30;
 static int baseNote = 440;
 char baseDisplay[100];
 static int currNote = 0;
@@ -47,6 +50,8 @@ char octDisplay[100];
 static int spectX = 0;
 static float histData[512];
 static int results[2];
+static float centError = 0.0;
+char centDisplay[100];
 
 
 static char notes[12][3]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
@@ -55,6 +60,13 @@ static char notes[12][3]={"C","C#","D","D#","E","F","F#","G","G#","A","A#","B"};
 int int_buffer[SAMPLES];
 static float q[SAMPLES];
 static float w[SAMPLES];
+
+static float dec_q[SAMPLES/4];
+static float dec_w[SAMPLES/4];
+static float sec_q[SAMPLES*2];
+static float sec_w[SAMPLES*2];
+static float sec_dec_q[SAMPLES/8];
+static float sec_dec_w[SAMPLES/8];
 
 static inline void read_fsl_values(float* q, int n) {
    int i;
@@ -131,6 +143,8 @@ QState Lab2A_stateA(Lab2A *me) {
 	        lcdPrint("Base Note: ", baseX, baseY);
 	        sprintf(baseDisplay, "%d Hz", baseNote);
 	        lcdPrint(baseDisplay, baseX + 100, baseY);
+	        lcdPrint("Cent Error: ", centX, centY);
+
 			return Q_HANDLED();
 		}
 		
@@ -210,15 +224,68 @@ QState Lab2A_stateA(Lab2A *me) {
 	       //Get new values
 	       read_fsl_values(q, SAMPLES);
 
+	       for(int i = 0; i < SAMPLES; i+=4)
+	       {
+	    	   float sum = q[i] + q[i+1] + q[i+2] + q[i+3];
+	    	   dec_q[i/4] = sum/4;
+	       }
+
+//	       xil_printf("q_dec START");
+//	       for(int i = 0; i < 512; i++)
+//	       {
+//			   int whole = dec_q[i];
+//			   int thousandths = (dec_q[i]-whole) * 1000000;
+//	    	   xil_printf("q_dec[%d]: %d.%d\r\n", i, whole, thousandths);
+//	       }
+//	       xil_printf("q_dec END");
+
 	       sample_f = 100*1000*1000/2048.0;
 
 	       for(l=0;l<SAMPLES;l++)
 	    	   w[l]=0;
 
-	       frequency=fft(q,w,SAMPLES,M,sample_f);
+	       for(l=0;l<(SAMPLES/4);l++)
+	    	   dec_w[l]=0;
+	       //xil_printf("Before first FFT \r\n");
+	       frequency=fft(dec_q,dec_w,(SAMPLES/4),M,sample_f/4);
+	       //xil_printf("After first FFT \r\n");
 
-		   findNote(frequency, baseNote, results);
+//	       if(frequency < 440)
+//	       {
+//	    	   read_fsl_values(sec_q, SAMPLES*2);
+//		       for(int i = 0; i < SAMPLES*2; i+=8)
+//		       {
+//		    	   float sum = sec_q[i] + sec_q[i+1] + sec_q[i+2] + sec_q[i+3] + sec_q[i+4] + sec_q[i+5] + sec_q[i+6] + sec_q[i+7];
+//		    	   sec_dec_q[i/8] = sum/8;
+//		       }
+//		       for(l=0;l<(SAMPLES/4);l++)
+//		    	   sec_dec_w[l]=0;
+//
+//		       frequency=fft(sec_dec_q,sec_dec_w,(SAMPLES/4),M,sample_f/8);
+//
+//	       }
+
+//		   if(frequency < 440)
+//		   {
+//			   for(int i = 0; i < SAMPLES/4; i+=2)
+//			   {
+//				   float sum = dec_q[i] + dec_q[i+1];
+//				   sec_dec_q[i/2] = sum/2;
+//			   }
+//
+//			   for(l=0;l<(SAMPLES/8);l++)
+//				   sec_dec_w[l]=0;
+//
+//			   xil_printf("Before second FFT \r\n");
+//			   frequency=fft(sec_dec_q,sec_dec_w,(SAMPLES/8),8,sample_f/8);
+//			   xil_printf("After second FFT \r\n");
+//		   }
+
+		   findNote(frequency, baseNote, results, &centError);
 		   sprintf(frequencyDisplay, "%.2f Hz", frequency);
+//		   int centsWhole = centError;
+//		   int centsThousandths = (centError-centsWhole) * 1000000;
+//		   xil_printf("Cent error: %d.%d \r\n", centsWhole, centsThousandths);
 
 
 		   //Rewrite values
@@ -227,7 +294,7 @@ QState Lab2A_stateA(Lab2A *me) {
 		       setFont(&TimesNewRoman_96);
 		       setColor(0, 0, 0);
 		       lcdPrint(notes[currNote], noteX, noteY);
-	           setColor(0, 255, 0);
+		       setColor(0, 255, 0);
 	           lcdPrint(notes[results[0]], noteX, noteY);
 			   currNote = results[0];
 		   }
@@ -248,6 +315,30 @@ QState Lab2A_stateA(Lab2A *me) {
 	       fillRect(freqX+100, freqY, 255, freqY + 20);
 	       setColor(0, 255, 0);
            lcdPrint(frequencyDisplay, freqX+100, freqY);
+
+	       setFont(&TimesNewRoman_16);
+	       setColor(0, 0, 0);
+	       fillRect(centX+100, centY, 255, centY + 20);
+	       setColor(0, 255, 0);
+	       sprintf(centDisplay, "%f", centError);
+           lcdPrint(centDisplay, centX+100, centY);
+
+           //Error rectangle
+           setColor(0, 0, 0);
+           fillRect(0, freqY - 75, 240, freqY - 50);
+	       if(fabs(centError) < 25)
+	       {
+	           setColor(0, 255, 0);
+	       }
+	       else if(fabs(centError) < 75)
+	       {
+	    	   setColor(255, 175, 0);
+	       }
+	       else
+	       {
+	    	   setColor(255, 0, 0);
+	       }
+	       fillRect(120, freqY - 75, 120+centError, freqY - 50);
 
 
 	           //get time to run program
@@ -306,29 +397,41 @@ QState Lab2A_stateB(Lab2A *me) {
 			       //Get new values
 			       read_fsl_values(q, SAMPLES);
 
+			       for(int i = 0; i < SAMPLES; i+=4)
+			       {
+			    	   float sum = q[i] + q[i+1] + q[i+2] + q[i+3];
+			    	   dec_q[i/4] = sum/4;
+			       }
+
 			       sample_f = 100*1000*1000/2048.0;
 
-			       for(l=0;l<SAMPLES;l++)
-			    	   w[l]=0;
+			       	       for(l=0;l<SAMPLES;l++)
+			       	    	   w[l]=0;
 
-			       hist_fft(q,w,SAMPLES,M,sample_f, histData);
+			       	       for(l=0;l<(SAMPLES/4);l++)
+			       	    	   dec_w[l]=0;
+
+
+			       hist_fft(dec_q,dec_w,(SAMPLES/4),M,sample_f/4, histData);
 //			       xil_printf("Histogram Data START \r\n");
 //			       for(int i = 0; i < 512; i++)
 //			       {
 //			    	   	   int whole, thousandths;
-//			    	   	   whole = log(histData[i]);
-//			    	   	   thousandths = (log(histData[i])-whole) * 1000;
+//			    	   	   whole = logf(histData[i]);
+//			    	   	   thousandths = (logf(histData[i])-whole) * 1000;
+//			    	   	   whole = histData[i];
+//			    	   	   thousandths = (histData[i] - whole) * 1000;
 //			    	   	   xil_printf("Bin %d: %d.%d \r\n", i, whole, thousandths);
 //			       }
 //			       xil_printf("Histogram Data END \r\n");
 
 			       for(int i = 0; i < 512; i++) //TODO - need to figure out a way to reduce this to 240 bins
 			       {
-			    	   if(log(histData[i]) < 0.25)
+			    	   if(logf(histData[i]) < 0.25)
 			    	   {
 			    		   setColor(0,0,255);
 			    	   }
-			    	   else if(log(histData[i]) < 0.75)
+			    	   else if(logf(histData[i]) < 0.75)
 			    	   {
 			    		   setColor(0,255,0);
 			    	   }
